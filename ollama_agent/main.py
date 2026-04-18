@@ -27,12 +27,14 @@ from .config import (
     save_web_provider, load_web_provider, WEB_PROVIDERS,
 )
 from .sessions import save_session, list_sessions, load_session
+from .backups import undo_last, stack_size
+from .costs import estimate_cost, lookup_price, fmt_usd
 
 console = Console()
 
 BANNER = (
     "   [bold cyan]┌────────┐[/bold cyan]\n"
-    "   [bold cyan]│[/bold cyan] [cyan]◉[/cyan]    [cyan]◉[/cyan] [bold cyan]│[/bold cyan]   ⚡ [bold cyan]Ollama Agent[/bold cyan]  [dim]v0.7.0 — AI coding assistant[/dim]\n"
+    "   [bold cyan]│[/bold cyan] [cyan]◉[/cyan]    [cyan]◉[/cyan] [bold cyan]│[/bold cyan]   ⚡ [bold cyan]Ollama Agent[/bold cyan]  [dim]v0.8.0 — AI coding assistant[/dim]\n"
     "   [bold cyan]│  ────  │[/bold cyan]   [dim]────────────────────────────────────[/dim]\n"
     "   [bold cyan]└───┬────┘[/bold cyan]   Type [bold]/[/bold] for commands\n"
     "  [bold cyan]┌────┴─────┐[/bold cyan]  [bold]Ctrl+C[/bold] cancel  ·  [bold]Ctrl+D[/bold] exit\n"
@@ -105,6 +107,18 @@ _COMMANDS_BILINGUAL = [
     ("/web",       "[on|off|provider <name>]",
         "Toggle web search or switch provider (duckduckgo/brave/tavily)",
         "Attiva/disattiva ricerca web o cambia provider (duckduckgo/brave/tavily)"),
+    ("/compact",   "",
+        "Summarize conversation to save context tokens",
+        "Riassume la conversazione per risparmiare token di contesto"),
+    ("/commit",    "",
+        "Generate a commit message for staged changes and commit",
+        "Genera un messaggio di commit per le modifiche staged e committa"),
+    ("/undo",      "",
+        "Undo the last file edit performed by the agent",
+        "Annulla l'ultima modifica di file fatta dall'agent"),
+    ("/costs",     "",
+        "Show estimated session and weekly costs per provider/model",
+        "Mostra costi stimati di sessione e settimana per provider/modello"),
     ("/quiet",     "",
         "Toggle quiet mode (hide tool call details)",
         "Attiva/disattiva la modalità silenziosa"),
@@ -503,6 +517,246 @@ def _cmd_mcp(agent: Agent, args: str) -> None:
         console.print("[dim]Uso: /mcp list | tools | enable <n> | disable <n> | add <n> <cmd> [args] | remove <n> | reload[/dim]")
 
 
+def _git_collect() -> tuple[bool, str, str, str, str]:
+    """Return (is_repo, status_short, diff, diff_stat, recent_log)."""
+    try:
+        subprocess.check_output(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return (False, "", "", "", "")
+
+    def run(args: list[str]) -> str:
+        try:
+            return subprocess.check_output(
+                args, stderr=subprocess.DEVNULL, text=True, timeout=15,
+            )
+        except Exception:
+            return ""
+
+    status = run(["git", "status", "--short"])
+    diff_stat = run(["git", "diff", "--cached", "--stat"]) or run(["git", "diff", "--stat"])
+    diff = run(["git", "diff", "--cached"]) or run(["git", "diff"])
+    recent = run(["git", "log", "--oneline", "-n", "10"])
+    return (True, status, diff, diff_stat, recent)
+
+
+def _cmd_commit(agent: Agent) -> None:
+    """Generate a commit message from current changes and commit."""
+    is_repo, status, diff, diff_stat, recent_log = _git_collect()
+    if not is_repo:
+        console.print("[red]Non è un repository git.[/red]")
+        return
+    if not status.strip() and not diff.strip():
+        console.print("[dim]Niente da committare — working tree pulito.[/dim]")
+        return
+
+    # Ensure there's something staged; if not, offer to stage everything
+    try:
+        staged = subprocess.check_output(
+            ["git", "diff", "--cached", "--name-only"],
+            stderr=subprocess.DEVNULL, text=True, timeout=10,
+        ).strip()
+    except Exception:
+        staged = ""
+
+    if not staged:
+        console.print("[dim]Nessun file in staging.[/dim]")
+        preview = Table(show_header=False, box=None, padding=(0, 2))
+        preview.add_column(style="cyan")
+        for line in status.splitlines():
+            preview.add_row(line)
+        console.print(Panel(preview, title="[bold]git status[/bold]", border_style="cyan", padding=(0, 1)))
+        try:
+            ans = input("  Fare 'git add -A' di tutti i file mostrati? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if ans not in ("y", "yes", "s", "si", "sì"):
+            console.print("[dim]Annullato — aggiungi manualmente i file con 'git add'.[/dim]")
+            return
+        try:
+            subprocess.check_call(["git", "add", "-A"])
+        except Exception as e:
+            console.print(f"[red]git add fallito:[/red] {e}")
+            return
+        diff = subprocess.check_output(
+            ["git", "diff", "--cached"], stderr=subprocess.DEVNULL, text=True,
+        )
+        diff_stat = subprocess.check_output(
+            ["git", "diff", "--cached", "--stat"], stderr=subprocess.DEVNULL, text=True,
+        )
+
+    # Ask the LLM for a commit message
+    console.print("[dim]Generazione messaggio di commit...[/dim]")
+    try:
+        with console.status("[dim]thinking...[/dim]", spinner="dots"):
+            msg = agent.propose_commit_message(status, diff, recent_log)
+    except Exception as e:
+        console.print(f"[red]Errore generazione messaggio:[/red] {e}")
+        return
+
+    if not msg:
+        console.print("[red]Il modello non ha restituito un messaggio.[/red]")
+        return
+
+    # Strip accidental code fences
+    msg = msg.strip()
+    if msg.startswith("```"):
+        msg = msg.strip("`").strip()
+        if msg.lower().startswith("text\n"):
+            msg = msg[5:]
+
+    console.print(Panel(
+        msg,
+        title="[bold]Messaggio di commit proposto[/bold]",
+        border_style="cyan",
+        padding=(0, 1),
+    ))
+    if diff_stat.strip():
+        console.print(Panel(
+            diff_stat.strip(),
+            title="[bold]diff stat[/bold]",
+            border_style="dim",
+            padding=(0, 1),
+        ))
+    try:
+        ans = input("  Commit? [Y/n/e=edit] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    if ans in ("n", "no"):
+        console.print("[dim]Commit annullato.[/dim]")
+        return
+
+    if ans in ("e", "edit"):
+        try:
+            new_msg = input("  Nuovo messaggio (una riga): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if new_msg:
+            msg = new_msg
+
+    try:
+        subprocess.check_call(["git", "commit", "-m", msg])
+        console.print("[green]✓[/green] Commit creato")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[red]git commit fallito:[/red] {e}")
+
+
+def _cmd_undo(agent: Agent) -> None:
+    """Undo the last edit_file/write_file performed by the agent."""
+    size = stack_size()
+    if size == 0:
+        console.print("[dim]Nessuna operazione da annullare in questa sessione.[/dim]")
+        return
+    ok, msg = undo_last()
+    if ok:
+        console.print(f"[green]✓[/green] {msg}")
+        remaining = stack_size()
+        if remaining:
+            console.print(f"[dim]  ({remaining} operazione/i ancora annullabili)[/dim]")
+    else:
+        console.print(f"[yellow]⚠[/yellow] {msg}")
+
+
+def _cmd_compact(agent: Agent) -> None:
+    """Summarize the conversation history to save context tokens."""
+    if len(agent.messages) <= agent._system_prefix_count():
+        console.print("[dim]Niente da compattare — la conversazione è vuota.[/dim]")
+        return
+    console.print("[dim]Riassumo la conversazione...[/dim]")
+    try:
+        with console.status("[dim]thinking...[/dim]", spinner="dots"):
+            before, after, chars = agent.compact()
+    except Exception as e:
+        console.print(f"[red]Errore durante la compattazione:[/red] {e}")
+        return
+    if before == after:
+        console.print("[dim]Nessun messaggio da compattare.[/dim]")
+        return
+    console.print(
+        f"[green]✓[/green] Conversazione compattata: "
+        f"[bold]{before}[/bold] → [bold]{after}[/bold] messaggi "
+        f"[dim]({chars} caratteri di riassunto)[/dim]"
+    )
+
+
+def _cmd_costs(agent: Agent) -> None:
+    """Show estimated session and weekly costs."""
+    u = agent.usage
+
+    # Session costs
+    session_t = Table(show_header=True, box=None, padding=(0, 2))
+    session_t.add_column("provider/model", style="bold cyan")
+    session_t.add_column("input", justify="right")
+    session_t.add_column("output", justify="right")
+    session_t.add_column("cost", justify="right", style="bold")
+    session_t.add_column("price /1M (in/out)", style="dim")
+
+    total_session = 0.0
+    if u.session_breakdown:
+        for key, toks in sorted(u.session_breakdown.items()):
+            provider, _, model = key.partition("/")
+            cost = estimate_cost(provider, model, toks["input"], toks["output"])
+            total_session += cost
+            pin, pout = lookup_price(provider, model)
+            session_t.add_row(
+                key,
+                f"{toks['input']:,}",
+                f"{toks['output']:,}",
+                fmt_usd(cost),
+                f"${pin:.2f} / ${pout:.2f}",
+            )
+    else:
+        session_t.add_row("—", "0", "0", fmt_usd(0.0), "—")
+
+    session_t.add_row(
+        "[bold]totale sessione[/bold]",
+        f"[bold]{u.session_input:,}[/bold]",
+        f"[bold]{u.session_output:,}[/bold]",
+        f"[bold]{fmt_usd(total_session)}[/bold]",
+        "",
+    )
+    console.print(Panel(session_t, title="[bold]Costi stimati — sessione[/bold]", border_style="cyan", padding=(0, 1)))
+
+    # Weekly costs
+    weekly_t = Table(show_header=True, box=None, padding=(0, 2))
+    weekly_t.add_column("provider/model", style="bold cyan")
+    weekly_t.add_column("input", justify="right")
+    weekly_t.add_column("output", justify="right")
+    weekly_t.add_column("cost", justify="right", style="bold")
+
+    total_weekly = 0.0
+    breakdown = u.weekly_breakdown
+    if breakdown:
+        for key, toks in sorted(breakdown.items()):
+            provider, _, model = key.partition("/")
+            cost = estimate_cost(provider, model, toks.get("input", 0), toks.get("output", 0))
+            total_weekly += cost
+            weekly_t.add_row(
+                key,
+                f"{toks.get('input', 0):,}",
+                f"{toks.get('output', 0):,}",
+                fmt_usd(cost),
+            )
+    else:
+        weekly_t.add_row("—", "0", "0", fmt_usd(0.0))
+
+    weekly_t.add_row(
+        "[bold]totale settimana[/bold]",
+        f"[bold]{sum(x.get('input', 0) for x in breakdown.values()):,}[/bold]",
+        f"[bold]{sum(x.get('output', 0) for x in breakdown.values()):,}[/bold]",
+        f"[bold]{fmt_usd(total_weekly)}[/bold]",
+    )
+    week_label = u._weekly.get("week", "?")
+    console.print(Panel(weekly_t, title=f"[bold]Costi stimati — settimana {week_label}[/bold]", border_style="cyan", padding=(0, 1)))
+    console.print("[dim]  Prezzi indicativi (USD per 1M token). Modifica ~/.ollama_agent_prices.json per personalizzarli.[/dim]")
+
+
 def _cmd_init(agent: Agent) -> None:
     """Create or open AGENT.md in the current directory."""
     path = Path(os.getcwd()) / "AGENT.md"
@@ -865,6 +1119,18 @@ def run_interactive(agent: Agent) -> None:
                     console.print("\n[dim]Interrupted.[/dim]")
                     if agent.messages and agent.messages[-1]["role"] == "user":
                         agent.messages.pop()
+
+        elif cmd == "/compact":
+            _cmd_compact(agent)
+
+        elif cmd == "/commit":
+            _cmd_commit(agent)
+
+        elif cmd == "/undo":
+            _cmd_undo(agent)
+
+        elif cmd == "/costs":
+            _cmd_costs(agent)
 
         elif cmd == "/quiet":
             agent.quiet_mode = not agent.quiet_mode

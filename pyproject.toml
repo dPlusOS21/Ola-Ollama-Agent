@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ollama-agent"
-version = "0.7.0"
+version = "0.8.0"
 description = "An AI-powered coding agent for the terminal"
 license = {text = "MIT"}
 authors = [{name = "Daniele Deplano", email = "deplano.d@gmail.com"}]

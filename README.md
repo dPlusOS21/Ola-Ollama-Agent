@@ -362,6 +362,10 @@ Digita `/` nel prompt per vedere il menu a tendina con completamento automatico 
 | `/autosave` | | Attiva/disattiva il salvataggio automatico all'uscita |
 | `/settings` | | Mostra la configurazione corrente |
 | `/tools` | | Lista gli strumenti disponibili |
+| `/compact` | | Riassume la conversazione nel modello per liberare token di contesto |
+| `/commit` | | Genera un messaggio di commit con l'LLM e fa `git commit` dopo conferma |
+| `/undo` | | Annulla l'ultima modifica/scrittura di file fatta dall'agent (stack per sessione) |
+| `/costs` | | Mostra costi stimati (sessione + settimana) per provider/modello |
 | `/quiet` | | Attiva/disattiva la modalità silenziosa (nasconde i dettagli delle tool call) |
 | `/auto` | | Approva automaticamente tutte le operazioni |
 | `/manual` | | Chiedi consenso prima di operazioni di scrittura (default) |
@@ -1526,6 +1530,86 @@ pip install httpx ddgs markdownify
 | Conversazioni veloci e chiacchiere | ❌ NO (aumenta token inutilmente) |
 
 Tenere la ricerca web **sempre attiva** è sconsigliato: il modello potrebbe usarla anche quando non serve, sprecando token. Meglio attivarla quando serve e disattivarla dopo.
+
+---
+
+## Produttività: `/compact`, `/commit`, `/undo`, `/costs`
+
+Quattro comandi pensati per le sessioni lunghe di lavoro reale.
+
+### `/compact` — riduci i token di contesto
+
+Quando la conversazione diventa lunga, ogni nuovo messaggio paga in token tutto lo storico precedente. `/compact` chiede al modello corrente di riassumere la conversazione in un blocco breve (≤350 parole) e sostituisce la cronologia col riassunto, preservando il system prompt e il contesto progetto (AGENT.md).
+
+```
+> /compact
+  Riassumo la conversazione...
+  ✓ Conversazione compattata: 42 → 3 messaggi  (1247 caratteri di riassunto)
+```
+
+Da usare prima di affrontare un nuovo task correlato, o quando ola inizia a "dimenticare" i primi scambi. La conversazione successiva al `/compact` riparte leggera ma con memoria dell'essenziale.
+
+### `/commit` — commit con messaggio generato dall'LLM
+
+Flusso completo: controlla `git status` / `git diff --cached`, se nulla è in staging ti propone `git add -A`, manda diff e log recente al modello, ti mostra il messaggio proposto e chiede conferma.
+
+```
+> /commit
+  Generazione messaggio di commit...
+  ┌─ Messaggio di commit proposto ──────────────────────────┐
+  │ feat(web): add /web command with 3 provider support    │
+  │                                                         │
+  │ - DuckDuckGo default (no API key)                       │
+  │ - Brave and Tavily opt-in with env keys                 │
+  │ - Tools exposed only when /web on                       │
+  └─────────────────────────────────────────────────────────┘
+  Commit? [Y/n/e=edit]
+```
+
+Premendo `e` puoi riscrivere il messaggio a mano prima di committare. Il modello imita lo stile dei commit recenti (`git log --oneline -n 10`), quindi la lingua e la forma si allineano al repo.
+
+### `/undo` — annulla l'ultima modifica dell'agent
+
+Ogni `write_file` e `edit_file` fatto dall'agent salva prima un backup in `~/.ollama_agent_backups/`. `/undo` ripristina lo stato precedente all'ultima operazione (e può essere chiamato più volte per tornare indietro di più passi).
+
+```
+> scrivi config.py con i nuovi parametri
+  · write_file
+> /undo
+  ✓ Ripristinato (write_file): /home/daniele/progetto/config.py
+    (3 operazioni ancora annullabili)
+```
+
+Se il file è stato creato ex-novo dall'operazione, `/undo` lo elimina. Lo stack è per sessione: aprendo una nuova istanza di ola si riparte vuoti. Sono conservate fino a 100 operazioni per sessione.
+
+### `/costs` — stima costi per provider/modello
+
+Tiene traccia dei token per ogni coppia `provider/modello` usata nella sessione e nella settimana corrente, e li moltiplica per i prezzi list (USD per 1M token).
+
+```
+> /costs
+  ┌─ Costi stimati — sessione ──────────────────────────────────┐
+  │ provider/model                input  output   cost  /1M (in/out)
+  │ openrouter/claude-3.5-sonnet 12,450   3,890 $0.096  $3.00 / $15.00
+  │ ollama/qwen2.5-coder:7b       8,200   2,100 $0.0000 $0.00 / $0.00
+  │ totale sessione              20,650   5,990 $0.096
+  └─────────────────────────────────────────────────────────────┘
+```
+
+I modelli Ollama locali sono segnati a `$0.00`. I prezzi cloud sono conservativi ma indicativi — puoi sovrascriverli creando `~/.ollama_agent_prices.json` con la stessa struttura di `PRICES` in `ollama_agent/costs.py`.
+
+Esempio per aggiornare il prezzo di un singolo modello:
+
+```json
+{
+  "openrouter": {
+    "anthropic/claude-3.5-sonnet": [3.0, 15.0],
+    "deepseek/deepseek-chat": [0.14, 0.28]
+  }
+}
+```
+
+I totali settimanali si azzerano automaticamente al cambio di settimana ISO.
 
 ---
 

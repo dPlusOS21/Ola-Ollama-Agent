@@ -94,10 +94,11 @@ def _load_weekly_usage() -> dict:
     try:
         data = json.loads(_USAGE_FILE.read_text())
         if data.get("week") != _iso_week():
-            return {"week": _iso_week(), "input": 0, "output": 0}
+            return {"week": _iso_week(), "input": 0, "output": 0, "breakdown": {}}
+        data.setdefault("breakdown", {})
         return data
     except Exception:
-        return {"week": _iso_week(), "input": 0, "output": 0}
+        return {"week": _iso_week(), "input": 0, "output": 0, "breakdown": {}}
 
 
 def _save_weekly_usage(data: dict) -> None:
@@ -113,9 +114,11 @@ class Usage:
         self.session_output = 0
         self.last_input = 0
         self.last_output = 0
+        # Per-(provider,model) breakdown for the current session
+        self.session_breakdown: dict[str, dict[str, int]] = {}
         self._weekly = _load_weekly_usage()
 
-    def update(self, input_tokens: int, output_tokens: int) -> None:
+    def update(self, input_tokens: int, output_tokens: int, provider: str | None = None, model: str | None = None) -> None:
         self.last_input = input_tokens
         self.last_output = output_tokens
         self.session_input += input_tokens
@@ -123,7 +126,24 @@ class Usage:
         # Persist weekly totals
         self._weekly["input"] = self._weekly.get("input", 0) + input_tokens
         self._weekly["output"] = self._weekly.get("output", 0) + output_tokens
+
+        # Per-(provider,model) breakdown (session + weekly)
+        if provider and model:
+            key = f"{provider}/{model}"
+            sb = self.session_breakdown.setdefault(key, {"input": 0, "output": 0})
+            sb["input"] += input_tokens
+            sb["output"] += output_tokens
+
+            wb = self._weekly.setdefault("breakdown", {})
+            entry = wb.setdefault(key, {"input": 0, "output": 0})
+            entry["input"] = entry.get("input", 0) + input_tokens
+            entry["output"] = entry.get("output", 0) + output_tokens
+
         _save_weekly_usage(self._weekly)
+
+    @property
+    def weekly_breakdown(self) -> dict[str, dict[str, int]]:
+        return self._weekly.get("breakdown", {})
 
     @property
     def session_total(self) -> int:
@@ -249,6 +269,119 @@ class Agent:
             self.mcp.start()
         except Exception:
             pass
+
+    def _system_prefix_count(self) -> int:
+        """Count contiguous system messages at the start (system prompt + context + optional RAG hint)."""
+        n = 0
+        for msg in self.messages:
+            if msg.get("role") == "system":
+                n += 1
+            else:
+                break
+        return n
+
+    def _transcript_for_summary(self, messages: list[dict]) -> str:
+        """Render a compact text transcript of non-system messages for summarization."""
+        lines: list[str] = []
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                # Multimodal content: keep only the text parts
+                content = " ".join(
+                    (part.get("text", "") if isinstance(part, dict) else str(part))
+                    for part in content
+                )
+            if role == "tool":
+                text = str(content or "").strip()
+                if len(text) > 400:
+                    text = text[:400] + " …[truncated]"
+                lines.append(f"[tool result] {text}")
+            elif role == "assistant":
+                text = str(content or "").strip()
+                tool_calls = msg.get("tool_calls") or []
+                if tool_calls:
+                    names = ", ".join(tc.get("function", {}).get("name", "?") for tc in tool_calls)
+                    prefix = f"[assistant called: {names}] "
+                else:
+                    prefix = "[assistant] "
+                if text:
+                    lines.append(prefix + text)
+                elif tool_calls:
+                    lines.append(prefix.strip())
+            elif role == "user":
+                lines.append(f"[user] {str(content or '').strip()}")
+        return "\n".join(lines)
+
+    def compact(self) -> tuple[int, int, int]:
+        """Summarize the non-system conversation history into a single system message.
+
+        Returns (messages_before, messages_after, summary_chars).
+        Raises on LLM errors so the caller can inform the user.
+        """
+        prefix = self._system_prefix_count()
+        tail = self.messages[prefix:]
+        before = len(self.messages)
+
+        if not tail:
+            return (before, before, 0)
+
+        transcript = self._transcript_for_summary(tail)
+        if not transcript.strip():
+            return (before, before, 0)
+
+        prompt = (
+            "You are compressing a coding assistant's conversation history to save tokens.\n"
+            "Produce a concise summary of the exchange so far, capturing:\n"
+            "  • the user's goals and constraints,\n"
+            "  • key decisions and outcomes,\n"
+            "  • files created/modified and their purpose,\n"
+            "  • open tasks or known issues.\n"
+            "Be terse — bullet points, no pleasantries. Stay under ~350 words.\n\n"
+            "--- Conversation transcript ---\n"
+            + transcript
+            + "\n--- End ---\n\nSummary:"
+        )
+
+        response = self.client.chat.completions.create(
+            model=self.config.model,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.2,
+            max_tokens=600,
+        )
+        summary = (response.choices[0].message.content or "").strip()
+        if not summary:
+            return (before, before, 0)
+
+        self.messages = self.messages[:prefix] + [
+            {
+                "role": "system",
+                "content": "Summary of prior conversation (compacted to save context):\n" + summary,
+            }
+        ]
+        return (before, len(self.messages), len(summary))
+
+    def propose_commit_message(self, status: str, diff: str, recent_log: str) -> str:
+        """Ask the current LLM to propose a commit message based on staged/unstaged changes."""
+        # Trim very large diffs so we don't blow the context
+        if len(diff) > 8000:
+            diff = diff[:8000] + "\n…[diff truncated]"
+        prompt = (
+            "You are helping the user write a git commit message for their staged changes.\n"
+            "Match the tone and formatting of the recent log (imperative, same language if clear).\n"
+            "Output ONLY the commit message — no fences, no preface, no explanation.\n"
+            "Keep the subject line ≤72 characters. Add a body only if meaningful.\n\n"
+            f"Recent log:\n{recent_log.strip() or '(no prior commits)'}\n\n"
+            f"git status:\n{status.strip() or '(empty)'}\n\n"
+            f"Changes:\n{diff.strip() or '(no diff)'}\n"
+        )
+        response = self.client.chat.completions.create(
+            model=self.config.model,
+            messages=[{"role": "system", "content": prompt}],
+            temperature=0.2,
+            max_tokens=300,
+        )
+        return (response.choices[0].message.content or "").strip()
 
     def refresh_context(self) -> None:
         self.messages[1] = {"role": "system", "content": _build_context_block()}
@@ -614,6 +747,8 @@ class Agent:
                         self.usage.update(
                             chunk.usage.prompt_tokens,
                             chunk.usage.completion_tokens,
+                            provider=self.config.provider,
+                            model=self.config.model,
                         )
                     continue
 

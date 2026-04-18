@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from ..backups import record_backup
+
 
 def read_file(path: str) -> str:
     """Read a file and return its contents with line numbers."""
@@ -22,6 +24,7 @@ def write_file(path: str, content: str) -> str:
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+        record_backup(str(p), op="write_file")
         p.write_text(content, encoding="utf-8")
         return f"Successfully wrote {len(content)} characters to {path}"
     except Exception as e:
@@ -40,6 +43,7 @@ def edit_file(path: str, old_string: str, new_string: str) -> str:
             return f"Error: String not found in {path}"
         if count > 1:
             return f"Error: String found {count} times in {path}. Make old_string more unique."
+        record_backup(str(p), op="edit_file")
         new_content = content.replace(old_string, new_string, 1)
         p.write_text(new_content, encoding="utf-8")
         return f"Successfully edited {path}"
