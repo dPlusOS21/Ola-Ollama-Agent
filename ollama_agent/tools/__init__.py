@@ -1,6 +1,64 @@
 from .bash import run_bash
 from .files import read_file, write_file, edit_file, list_dir
 from .search import grep, find_files
+from .web import web_search, web_fetch
+
+WEB_TOOL_DEFINITIONS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": (
+                "Search the web and return the top results (title, URL, snippet). "
+                "Use this when the user asks about current events, recent library "
+                "versions, online documentation, or any information that may not be "
+                "in your training data. After finding a relevant URL, use web_fetch "
+                "to read its full content. Cite the URL inline in your answer."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query (free-form text)",
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Number of results to return (1-10, default 5)",
+                        "default": 5,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": (
+                "Download a URL and return its main textual content converted to "
+                "readable text. Use this to read the content of a page found via "
+                "web_search. Prefer HTTPS URLs. Content is truncated if too long."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "Full URL including http:// or https://",
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum characters to return (default 20000)",
+                        "default": 20000,
+                    },
+                },
+                "required": ["url"],
+            },
+        },
+    },
+]
 
 TOOL_DEFINITIONS = [
     {
@@ -218,17 +276,17 @@ TOOL_DEFINITIONS = [
 ]
 
 
-def execute_tool(name: str, args: dict, retriever=None, llm_client=None, llm_model=None) -> str:
+def execute_tool(name: str, args: dict, retriever=None, llm_client=None, llm_model=None, web_provider: str = "duckduckgo") -> str:
     """Dispatch a tool call by name."""
     try:
-        return _dispatch(name, args, retriever, llm_client, llm_model)
+        return _dispatch(name, args, retriever, llm_client, llm_model, web_provider)
     except KeyError as e:
         return f"Error: missing required argument {e} for tool '{name}'"
     except Exception as e:
         return f"Error executing tool '{name}': {e}"
 
 
-def _dispatch(name: str, args: dict, retriever=None, llm_client=None, llm_model=None) -> str:
+def _dispatch(name: str, args: dict, retriever=None, llm_client=None, llm_model=None, web_provider: str = "duckduckgo") -> str:
     if name == "bash":
         return run_bash(args["command"], args.get("timeout", 30))
     elif name == "read_file":
@@ -266,6 +324,17 @@ def _dispatch(name: str, args: dict, retriever=None, llm_client=None, llm_model=
             retriever, llm_client, llm_model,
             question=args["question"],
             source_filter=args.get("source_filter"),
+        )
+    elif name == "web_search":
+        return web_search(
+            args["query"],
+            provider=web_provider,
+            max_results=args.get("max_results", 5),
+        )
+    elif name == "web_fetch":
+        return web_fetch(
+            args["url"],
+            max_chars=args.get("max_chars", 20000),
         )
     else:
         return f"Unknown tool: {name}"

@@ -23,6 +23,8 @@ from .config import (
     save_quiet_pref, load_quiet_pref,
     save_rag_mode,
     save_language, load_language, LANGUAGES,
+    save_web_enabled, load_web_enabled,
+    save_web_provider, load_web_provider, WEB_PROVIDERS,
 )
 from .sessions import save_session, list_sessions, load_session
 
@@ -30,7 +32,7 @@ console = Console()
 
 BANNER = (
     "   [bold cyan]┌────────┐[/bold cyan]\n"
-    "   [bold cyan]│[/bold cyan] [cyan]◉[/cyan]    [cyan]◉[/cyan] [bold cyan]│[/bold cyan]   ⚡ [bold cyan]Ollama Agent[/bold cyan]  [dim]v0.6.0 — AI coding assistant[/dim]\n"
+    "   [bold cyan]│[/bold cyan] [cyan]◉[/cyan]    [cyan]◉[/cyan] [bold cyan]│[/bold cyan]   ⚡ [bold cyan]Ollama Agent[/bold cyan]  [dim]v0.7.0 — AI coding assistant[/dim]\n"
     "   [bold cyan]│  ────  │[/bold cyan]   [dim]────────────────────────────────────[/dim]\n"
     "   [bold cyan]└───┬────┘[/bold cyan]   Type [bold]/[/bold] for commands\n"
     "  [bold cyan]┌────┴─────┐[/bold cyan]  [bold]Ctrl+C[/bold] cancel  ·  [bold]Ctrl+D[/bold] exit\n"
@@ -100,6 +102,9 @@ _COMMANDS_BILINGUAL = [
     ("/mcp",       "<subcmd>",
         "Manage MCP servers (list/tools/enable/disable/add/remove/reload)",
         "Gestione server MCP (list/tools/enable/disable/add/remove/reload)"),
+    ("/web",       "[on|off|provider <name>]",
+        "Toggle web search or switch provider (duckduckgo/brave/tavily)",
+        "Attiva/disattiva ricerca web o cambia provider (duckduckgo/brave/tavily)"),
     ("/quiet",     "",
         "Toggle quiet mode (hide tool call details)",
         "Attiva/disattiva la modalità silenziosa"),
@@ -177,6 +182,8 @@ def _show_settings(agent: Agent) -> None:
     t.add_row("approve", "auto" if agent.auto_approve else "manual (ask consent)")
     t.add_row("auto-save", "on" if load_auto_save_pref() else "off")
     t.add_row("quiet mode", "on" if agent.quiet_mode else "off")
+    web_state = f"on ({agent.web_provider})" if agent.web_enabled else "off"
+    t.add_row("web access", web_state)
     t.add_row("language", load_language())
     t.add_row("messages", str(len(agent.messages) - 1))  # exclude system prompt
     console.print(Panel(t, title="[bold]Settings[/bold]", border_style="cyan", padding=(0, 1)))
@@ -220,6 +227,8 @@ def _show_tools() -> None:
         ("list_dir",   "List directory contents"),
         ("grep",       "Search files with regex"),
         ("find_files", "Find files by glob pattern"),
+        ("web_search", "Search the web (enable with /web on)"),
+        ("web_fetch",  "Fetch a URL and read its content (enable with /web on)"),
     ]
     t = Table(show_header=False, box=None, padding=(0, 2))
     t.add_column(style="bold cyan", no_wrap=True)
@@ -789,6 +798,39 @@ def run_interactive(agent: Agent) -> None:
 
         elif cmd == "/mcp":
             _cmd_mcp(agent, parts[1] if len(parts) > 1 else "")
+
+        elif cmd == "/web":
+            sub = parts[1].strip().lower() if len(parts) > 1 else ""
+            if not sub:
+                state = "ON" if agent.web_enabled else "OFF"
+                console.print(f"[dim]Web access: [bold]{state}[/bold]  ·  provider: [bold]{agent.web_provider}[/bold][/dim]")
+                console.print("[dim]  Usage: /web on | /web off | /web provider <duckduckgo|brave|tavily>[/dim]")
+            elif sub == "on":
+                agent.web_enabled = True
+                save_web_enabled(True)
+                console.print(f"[dim]Web access: [bold]ON[/bold] (provider: {agent.web_provider}) — saved[/dim]")
+            elif sub == "off":
+                agent.web_enabled = False
+                save_web_enabled(False)
+                console.print("[dim]Web access: [bold]OFF[/bold] — saved[/dim]")
+            elif sub.startswith("provider"):
+                tokens = sub.split(None, 1)
+                if len(tokens) < 2:
+                    console.print(f"[dim]Current provider: [bold]{agent.web_provider}[/bold]  ·  available: {', '.join(WEB_PROVIDERS)}[/dim]")
+                else:
+                    name = tokens[1].strip()
+                    if name not in WEB_PROVIDERS:
+                        console.print(f"[red]Unknown provider:[/red] {name}. Choose from: {', '.join(WEB_PROVIDERS)}")
+                    else:
+                        agent.web_provider = name
+                        save_web_provider(name)
+                        console.print(f"[dim]Web provider: [bold]{name}[/bold] (saved)[/dim]")
+                        if name == "brave" and not os.getenv("BRAVE_API_KEY"):
+                            console.print("[yellow]  ⚠ BRAVE_API_KEY not set — get a free key at https://brave.com/search/api[/yellow]")
+                        elif name == "tavily" and not os.getenv("TAVILY_API_KEY"):
+                            console.print("[yellow]  ⚠ TAVILY_API_KEY not set — get a free key at https://tavily.com[/yellow]")
+            else:
+                console.print("[red]Usage:[/red] /web on | /web off | /web provider <duckduckgo|brave|tavily>")
 
         elif cmd == "/lang":
             if len(parts) > 1:

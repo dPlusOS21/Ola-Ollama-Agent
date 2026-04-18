@@ -348,6 +348,7 @@ Digita `/` nel prompt per vedere il menu a tendina con completamento automatico 
 | `/voice` | | Detta il prompt a voce dal microfono (vedi sezione dedicata) |
 | `/lang` | `<it\|en>` | Cambia lingua dell'interfaccia (descrizioni comandi e `/help`) |
 | `/mcp` | `<subcmd>` | Gestione server MCP (vedi sezione dedicata) |
+| `/web` | `[on\|off\|provider <name>]` | Attiva/disattiva ricerca web o cambia provider (vedi sezione dedicata) |
 | `/knowledge` | `[files]` | Mostra le cartelle indicizzate (con `files` elenca anche i singoli file) |
 | `/model` | `<nome>` | Mostra o cambia il modello attivo (salvato per provider) |
 | `/models` | | Lista i modelli disponibili in Ollama (● = attivo) |
@@ -1419,6 +1420,115 @@ I server che accedono a servizi cloud (GitHub, Slack, Gmail, ecc.) richiedono le
 
 ---
 
+## Ricerca web (`/web`)
+
+Ola può cercare informazioni su internet quando necessario — utile per documentazione aggiornata, versioni recenti di librerie, eventi attuali, o qualsiasi cosa non presente nei dati di addestramento del modello. La funzione è **opzionale** e **disattivata di default**.
+
+### Come funziona
+
+Quando abiliti la ricerca web, ola espone al modello due nuovi tool:
+
+| Tool | Cosa fa |
+|---|---|
+| `web_search(query)` | Cerca sul web e restituisce i top 5 risultati (titolo, URL, snippet) |
+| `web_fetch(url)` | Scarica una pagina e la converte in testo markdown leggibile |
+
+Il modello li usa in sequenza: prima `web_search` per trovare le pagine rilevanti, poi `web_fetch` su 1-2 risultati migliori per leggerne il contenuto completo. I risultati vengono citati nella risposta con l'URL.
+
+Quando il web è **disattivato**, i tool non vengono nemmeno esposti al modello — nessuna distrazione, nessun rischio di chiamate involontarie.
+
+### Comandi
+
+```bash
+/web                                 # mostra stato corrente
+/web on                              # attiva la ricerca web
+/web off                             # disattiva la ricerca web
+/web provider duckduckgo             # cambia motore (default)
+/web provider brave                  # usa Brave Search (serve API key)
+/web provider tavily                 # usa Tavily (serve API key)
+```
+
+La scelta è **persistente** (salvata in `~/.ollama_agent_prefs.json`) e visibile in `/settings` come `web access: on (duckduckgo)`.
+
+### I tre provider supportati
+
+| Provider | API key | Qualità | Quota gratuita | Note |
+|---|---|---|---|---|
+| **DuckDuckGo** (default) | ❌ Nessuna | Media | Illimitata (rate-limited) | Zero setup, funziona subito. Installato da `install.sh`/`install.bat` |
+| **Brave Search** | ✅ `BRAVE_API_KEY` | Alta | 2000 query/mese | Indice proprio di 50+ miliardi di pagine. Key gratuita su [brave.com/search/api](https://brave.com/search/api) |
+| **Tavily** | ✅ `TAVILY_API_KEY` | Ottima (AI-optimized) | 1000 query/mese | Ottimizzato per LLM: restituisce già contenuti sintetici. Key gratuita su [tavily.com](https://tavily.com) |
+
+### Configurare una API key
+
+Per usare Brave o Tavily, aggiungi la key al file `.env`:
+
+```env
+BRAVE_API_KEY=BSA...
+TAVILY_API_KEY=tvly-...
+```
+
+Oppure esportala come variabile d'ambiente prima di avviare ola:
+
+```bash
+export BRAVE_API_KEY=BSA...
+ola
+```
+
+Se cambi provider con `/web provider brave` ma la key non è configurata, ola ti avvisa con un messaggio in giallo.
+
+### Esempio pratico
+
+```
+> /web on
+  Web access: ON (provider: duckduckgo) — saved
+
+> quali novità ci sono nella versione 3.13 di Python?
+  · web_search
+  · web_fetch
+  La versione 3.13 di Python, rilasciata il 7 ottobre 2024, include
+  diverse novità importanti [python.org/downloads/release/python-3130/]:
+
+  1. **JIT experimental**: un nuovo compilatore just-in-time...
+  2. **GIL opzionale**: supporto sperimentale per disabilitare il GIL...
+  ...
+```
+
+### Dipendenze
+
+Le dipendenze vengono installate automaticamente da `install.sh`/`install.bat`:
+
+- **httpx** — client HTTP per fetch e chiamate API
+- **ddgs** — client DuckDuckGo (no API key)
+- **markdownify** — conversione HTML → markdown per `web_fetch`
+
+Se hai installato a mano:
+
+```bash
+pip install httpx ddgs markdownify
+```
+
+### Privacy e limiti
+
+- **DuckDuckGo**: le query vanno a DuckDuckGo, che non traccia gli utenti. Rate limit può bloccarti temporaneamente se usi molto.
+- **Brave**: le query passano dai server Brave (privacy-focused per policy). La API key identifica te, non il modello.
+- **Tavily**: commerciale ma con privacy policy standard. API key identificativa.
+- **`web_fetch`**: fa richieste HTTP dirette ai siti con user agent `OlaAgent`. Alcuni siti possono bloccarlo (serve un server MCP dedicato in quei casi).
+
+### Quando usarla e quando no
+
+| Scenario | Web mode |
+|---|---|
+| Domande sulla tua base di codice | ❌ NO — usa RAG (`/learn`) |
+| Domande su librerie aggiornate, versioni recenti | ✅ SÌ |
+| Ricerca documentazione ufficiale di un framework | ✅ SÌ |
+| Eventi attuali, notizie | ✅ SÌ |
+| Lettura di una pagina specifica che conosci già | ✅ SÌ (`web_fetch`) |
+| Conversazioni veloci e chiacchiere | ❌ NO (aumenta token inutilmente) |
+
+Tenere la ricerca web **sempre attiva** è sconsigliato: il modello potrebbe usarla anche quando non serve, sprecando token. Meglio attivarla quando serve e disattivarla dopo.
+
+---
+
 ## Strumenti disponibili
 
 Il modello può usare autonomamente questi strumenti. Quelli che modificano il sistema richiedono consenso (in modalità manual, il default):
@@ -1430,6 +1540,8 @@ Il modello può usare autonomamente questi strumenti. Quelli che modificano il s
 | `grep` | Cerca con regex nei file | No |
 | `find_files` | Trova file tramite pattern glob | No |
 | `search_knowledge` | Cerca nella knowledge base RAG | No |
+| `web_search` | Cerca sul web (richiede `/web on`) | No |
+| `web_fetch` | Scarica e legge una pagina web (richiede `/web on`) | No |
 | `bash` | Esegue comandi shell | **Sì** |
 | `write_file` | Crea o sovrascrive un file | **Sì** (write preview) |
 | `edit_file` | Sostituisce una stringa esatta in un file | **Sì** (diff preview) |

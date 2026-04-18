@@ -184,6 +184,14 @@ if errorlevel 1 (
     echo [OK] MCP client installato ^(pacchetto 'mcp'^)
 )
 
+:: ── Web search dependencies ──────────────────────────────────────────────────
+!PYTHON! -m pip install --quiet httpx ddgs markdownify
+if errorlevel 1 (
+    echo [AVVISO] Dipendenze web non installate — /web non sara' disponibile
+) else (
+    echo [OK] Dipendenze web installate ^(httpx, ddgs, markdownify^)
+)
+
 :: ── .env setup ───────────────────────────────────────────────────────────────
 if not exist "%SCRIPT_DIR%.env" (
     if exist "%SCRIPT_DIR%.env.example" (

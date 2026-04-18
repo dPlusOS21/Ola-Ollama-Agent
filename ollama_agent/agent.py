@@ -14,10 +14,11 @@ from rich.text import Text
 from .config import (
     Config, PROVIDERS, TASK_CATEGORIES,
     load_routing_mode, load_static_rules, load_quiet_pref, load_rag_mode,
+    load_web_enabled, load_web_provider,
 )
 from .mcp_client import MCPManager
 from .rag.retriever import Retriever
-from .tools import TOOL_DEFINITIONS, execute_tool
+from .tools import TOOL_DEFINITIONS, WEB_TOOL_DEFINITIONS, execute_tool
 
 console = Console()
 
@@ -212,7 +213,7 @@ def _pull_ollama_model(model: str) -> bool:
 
 
 # Tools that only read data — never need user consent
-_SAFE_TOOLS = {"read_file", "list_dir", "grep", "find_files", "search_knowledge"}
+_SAFE_TOOLS = {"read_file", "list_dir", "grep", "find_files", "search_knowledge", "web_search", "web_fetch"}
 
 # Bash commands that are particularly destructive
 _DANGEROUS_COMMANDS = {"rm", "rmdir", "del", "format", "mkfs", "dd", "shred", ">"}
@@ -236,6 +237,8 @@ class Agent:
         self.rag_mode = load_rag_mode()
         self.routing_mode = load_routing_mode()
         self.static_rules = load_static_rules()
+        self.web_enabled = load_web_enabled()
+        self.web_provider = load_web_provider()
         self.retriever = Retriever(
             embed_model=os.getenv("OLLAMA_EMBED_MODEL") or None
         )
@@ -531,6 +534,7 @@ class Agent:
                                 retriever=self.retriever,
                                 llm_client=self.client,
                                 llm_model=self.config.model,
+                                web_provider=self.web_provider,
                             )
                     finally:
                         spinner.stop()
@@ -577,6 +581,8 @@ class Agent:
             # Try with include_usage; some local models don't support it
             try:
                 all_tools = TOOL_DEFINITIONS + (self.mcp.tools if self.mcp else [])
+                if self.web_enabled:
+                    all_tools = all_tools + WEB_TOOL_DEFINITIONS
                 stream = self.client.chat.completions.create(
                     model=self.config.model,
                     messages=self.messages,

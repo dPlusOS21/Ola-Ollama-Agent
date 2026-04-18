@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ollama-agent"
-version = "0.6.0"
+version = "0.7.0"
 description = "An AI-powered coding agent for the terminal"
 license = {text = "MIT"}
 authors = [{name = "Daniele Deplano", email = "deplano.d@gmail.com"}]
@@ -31,6 +31,9 @@ dependencies = [
     "python-docx>=1.0.0",
     "openpyxl>=3.0.0",
     "mcp>=1.0.0",
+    "httpx>=0.24.0",
+    "ddgs>=9.0.0",
+    "markdownify>=0.11.0",
 ]
 
 [project.optional-dependencies]

@@ -114,6 +114,32 @@ def load_queue_input_pref() -> bool:
     return prefs.get("queue_input", False)
 
 
+WEB_PROVIDERS = ("duckduckgo", "brave", "tavily")
+
+
+def save_web_enabled(enabled: bool) -> None:
+    prefs = load_user_prefs()
+    prefs["web_enabled"] = enabled
+    _PREFS_FILE.write_text(json.dumps(prefs, indent=2))
+
+
+def load_web_enabled() -> bool:
+    prefs = load_user_prefs()
+    return prefs.get("web_enabled", False)
+
+
+def save_web_provider(provider: str) -> None:
+    prefs = load_user_prefs()
+    prefs["web_provider"] = provider
+    _PREFS_FILE.write_text(json.dumps(prefs, indent=2))
+
+
+def load_web_provider() -> str:
+    prefs = load_user_prefs()
+    p = prefs.get("web_provider", "duckduckgo")
+    return p if p in WEB_PROVIDERS else "duckduckgo"
+
+
 LANGUAGES = ("it", "en")
 
 

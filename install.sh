@@ -187,6 +187,11 @@ $PYTHON -m pip install --quiet mcp \
     && echo -e "${GREEN}✓${RESET} MCP client installed (pacchetto 'mcp')" \
     || echo -e "${YELLOW}⚠${RESET}  MCP non installato — /mcp non sarà disponibile"
 
+# ── Web search dependencies ─────────────────────────────────────────────────
+$PYTHON -m pip install --quiet httpx ddgs markdownify \
+    && echo -e "${GREEN}✓${RESET} Web search deps installed (httpx, ddgs, markdownify)" \
+    || echo -e "${YELLOW}⚠${RESET}  Web deps non installati — /web non sarà disponibile"
+
 # ── Verify ola is reachable ──────────────────────────────────────────────────
 if ! command -v ola &>/dev/null; then
     # pip may install to ~/.local/bin which might not be in PATH
