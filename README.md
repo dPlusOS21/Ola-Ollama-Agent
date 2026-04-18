@@ -87,6 +87,114 @@ Dopo l'installazione il comando `ola` è disponibile ovunque nel terminale.
 
 ---
 
+## Installazione su PC senza privilegi di amministratore
+
+Se sei un **utente semplice** su un PC (scuola, ufficio, PC condiviso) dove non hai i permessi di admin/sudo, ola può comunque essere installato — con alcune differenze tra Linux e Windows.
+
+### Linux senza `sudo`
+
+| Componente | Installabile da utente? | Come |
+|---|---|---|
+| **Python 3.10+** | ✅ Sì (se non c'è già) | Via [**pyenv**](https://github.com/pyenv/pyenv) o **miniconda** installati nella tua home |
+| **ola** | ✅ Sì | `pip install --user .` → va in `~/.local/bin/` |
+| **Dipendenze Python** (openai, rich, mcp, ecc.) | ✅ Sì | `pip install --user` le installa in `~/.local/` |
+| **Ollama** | ❌ No | L'installer ufficiale richiede `sudo` |
+| **libportaudio2** (per `/voice`) | ❌ No | Richiede `sudo apt install` — `/voice` non sarà disponibile |
+| **Node.js** (per MCP via `npx`) | ✅ Sì | Installabile via **nvm** nella tua home senza `sudo` |
+
+**Procedura Linux senza sudo:**
+
+```bash
+# 1. Se non hai Python 3.10+, installa pyenv
+curl https://pyenv.run | bash
+pyenv install 3.11
+pyenv global 3.11
+
+# 2. Installa ola
+cd /percorso/ollama-agent
+pip install --user .
+
+# 3. Aggiungi ~/.local/bin al PATH
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# 4. Configura un provider cloud (Groq ha tier gratuito generoso)
+export GROQ_API_KEY=gsk_...
+ola -p groq
+```
+
+### Windows senza privilegi di admin
+
+Su Windows la situazione è spesso **più favorevole** di Linux: molti installer hanno l'opzione "per utente corrente" che non richiede admin.
+
+| Componente | Installabile da utente? | Come |
+|---|---|---|
+| **Python 3.10+** | ✅ Sì | Installer ufficiale da [python.org](https://www.python.org/downloads/) — spunta "Add Python to PATH", si installa in `%LOCALAPPDATA%\Programs\Python\` |
+| **ola** | ✅ Sì | `pip install --user .` → va in `%APPDATA%\Python\Python3XX\Scripts\` |
+| **Dipendenze Python** | ✅ Sì | `pip install --user` |
+| **Ollama** | ⚠️ Dipende | `OllamaSetup.exe` recenti installano in `%LOCALAPPDATA%\Programs\Ollama\` **senza admin**; versioni vecchie richiedevano admin |
+| **libportaudio per `/voice`** | ✅ Sì, automatico | Su Windows `pip install sounddevice` include le DLL precompilate — **nessuna dipendenza di sistema richiesta** |
+| **Node.js** (per MCP) | ✅ Sì | Installer ufficiale con "Install just for me", oppure **nvm-windows** / **fnm** |
+
+**La buona notizia su Windows:** a differenza di Linux, il comando `/voice` funziona anche senza admin, perché il pacchetto `sounddevice` include già tutto il necessario.
+
+**Procedura Windows senza admin:**
+
+```cmd
+:: 1. Scarica Python 3.10+ da python.org, durante l'installazione:
+::    [X] Add Python to PATH
+::    [X] Install for current user only (se appare la voce)
+
+:: 2. Verifica Python
+python --version
+
+:: 3. Installa ola
+cd C:\Users\TuoNome\Desktop\ollama-agent
+install.bat
+
+:: Se install.bat fallisce su Ollama, salta quella parte:
+pip install --user .
+```
+
+### PC aziendali con policy restrittive
+
+Attenzione: su molti PC aziendali, oltre al "non sei admin" ci possono essere **ulteriori blocchi**:
+
+| Restrizione | Sintomo | Workaround |
+|---|---|---|
+| **AppLocker / WDAC** | `python.exe` bloccato dall'esecuzione | Serve richiesta formale all'IT |
+| **Antivirus aziendale** | Blocca download `.exe` o DLL di Whisper | Usa solo provider cloud via API |
+| **Firewall corporate** | Blocca `ollama.com`, `huggingface.co` | Usa provider cloud (Groq/OpenAI/OpenRouter) |
+| **Proxy HTTPS con MITM** | `pip install` fallisce su SSL | `pip config set global.cert <path/a/cert.pem>` |
+| **Script disabilitati** | `install.bat` o PowerShell bloccati | Installa a mano con `pip install --user .` |
+
+### Setup "minimo robusto" per ambienti restrittivi
+
+Se sospetti restrizioni pesanti, questa rotta usa **solo Python + pip + HTTPS** verso cloud, senza servizi locali:
+
+```bash
+pip install --user .
+export OPENAI_API_KEY=sk-...      # o GROQ_API_KEY, OPENROUTER_API_KEY
+ola -p openai                      # oppure -p groq, -p openrouter
+```
+
+Nessun servizio in background, nessun driver, nessun socket locale. È il profilo più compatibile con PC aziendali bloccati.
+
+### Riepilogo funzionalità senza admin
+
+| Funzionalità | Linux (no sudo) | Windows (no admin) |
+|---|---|---|
+| ola + provider cloud (Groq/OpenAI/OpenRouter) | ✅ | ✅ |
+| Ollama locale | ❌ | ✅ (installer recente) |
+| Comando `/voice` (microfono) | ❌ | ✅ |
+| Server MCP via `npx` | ✅ (con nvm) | ✅ |
+| RAG (`/learn`, `/ask`) | ⚠️ serve servizio embedding | ✅ se installi Ollama |
+| Sessioni (`/save`, `/resume`) | ✅ | ✅ |
+
+**In sintesi:** su entrambi i sistemi ola funziona benissimo senza admin se usi un provider cloud. Su Windows hai anche accesso a Ollama locale e `/voice` senza admin. Linux è più restrittivo sulle dipendenze di sistema.
+
+---
+
 ## Avvio rapido
 
 ### Con Ollama (predefinito)
