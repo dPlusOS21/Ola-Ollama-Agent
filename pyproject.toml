@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ollama-agent"
+version = "0.6.0"
+description = "An AI-powered coding agent for the terminal"
+license = {text = "MIT"}
+authors = [{name = "Daniele Deplano", email = "deplano.d@gmail.com"}]
+readme = "README.md"
+keywords = ["ai", "agent", "ollama", "coding", "terminal", "cli"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.0",
+    "click>=8.0.0",
+    "python-dotenv>=1.0.0",
+    "pypdf>=4.0.0",
+    "python-docx>=1.0.0",
+    "openpyxl>=3.0.0",
+    "mcp>=1.0.0",
+]
+
+[project.optional-dependencies]
+voice = [
+    "faster-whisper>=1.0.0",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+]
+
+[project.scripts]
+ola = "ollama_agent.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ollama_agent"]
